@@ -1,0 +1,520 @@
+---
+title: "Salarios y Empleos de Puerto Rico 2001-2022"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Salarios y Empleos de Puerto Rico 2001-2022
+
+The purpose of this exercise is to see and have a better understanding of the job market in Puerto Rico for the year 2022. The data used for this exercise from the Occupational Employment and Wage Statistics of the Bureu of Labor Statistics of the United States. For more information please visit <https://www.bls.gov/oes/oes_emp.htm>. All the data was exported from May 2022. 
+
+One of the main exercises which is goung to be presented here is the concept of Elasticity of Wages. Here we will be using Linear Regression to estimate the elasticity of wages from Puerto Rico. 
+
+
+## First we load the libraries needed
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(readxl)
+library(tidyverse)
+library(janitor)
+library(broom)
+library(gridExtra)
+library(grid)
+library(ggpubr)
+library(xts)
+library(data.table)
+library(kableExtra)
+```
+
+
+## Data Wrangling  
+
+The data set brings all 50 states and some territories of the Unites States as well as different names column names. let's clean it up a little. 
+
+
+## Creating a function to read all the files from a local folder
+```{r data}
+process_grouped_file <- function(year, file_path, group) {
+  df <- suppressWarnings(read_excel(file_path)) %>% clean_names()
+  
+  # Define possible column names for each target
+  rename_map <- list(
+    a_mean      = c("a_mean"),
+    area_title  = c("area_title", "state"),
+    prim_state  = c("prim_state", "st"),
+    occ_title   = c("occ_title", "occ_titl"),
+    occ_code    = c("occ_code"),
+    tot_emp     = c("tot_emp")
+  )
+  
+# Build correct rename list: new_name = old_name
+  actual_rename <- list()
+  for (std_name in names(rename_map)) {
+    found <- intersect(rename_map[[std_name]], names(df))
+    if (length(found) > 0) {
+      actual_rename[[std_name]] <- found[1]  # this is the correct order: new = old
+    }
+  }
+  
+# Only proceed if all required final names are in the rename list
+  required <- c("a_mean", "area_title", "prim_state", "occ_title", "occ_code", "tot_emp")
+  if (!all(required %in% names(actual_rename))) {
+    warning(paste("Skipping year", year, "- missing required columns"))
+    return(NULL)
+  }
+  
+# Rename columns
+  df <- df %>%
+    rename(!!!actual_rename) %>%
+    select(all_of(required)) %>%
+    mutate(
+      A_MEAN = as.numeric(gsub("\\*", "", a_mean)),
+      TOT_EMP = as.numeric(gsub("\\*", "", tot_emp)),
+      YEAR = year
+    ) %>%
+    filter(!is.na(A_MEAN), !is.na(TOT_EMP)) %>%
+    select(A_MEAN, AREA_TITLE = area_title, PRIM_STATE = prim_state,
+           OCC_TITLE = occ_title, OCC_CODE = occ_code, TOT_EMP, YEAR) %>%
+    arrange(A_MEAN)
+  
+  return(df)
+}
+
+```
+##Setting the paramters for the process_grouped_file function
+
+We can use the setwd() with the folder path to read the data *"C:/Users/..."*
+
+```{r, echo=FALSE}
+setwd("C:/Users/yadel/OneDrive/Documents/1999-2021/")
+```
+
+```{r}
+file_info <- data.frame(
+  year = 2001:2021,
+  file = c(
+    "state_2001_dl.xls", "state_2002_dl.xls",
+    "state_May2003_dl.xls", "state_May2004_dl.xls", "state_May2005_dl.xls",
+    "state_May2006_dl.xls", "state_May2007_dl.xls", "state__M2008_dl.xls",
+    "state_2009_dl.xls", "state_M2010_dl.xls", "state_M2011_dl.xls", "state_M2012_dl.xls",
+    "state_M2013_dl.xls", "state_M2014_dl.xlsx", "state_M2015_dl.xlsx",
+    "state_M2016_dl.xlsx", "state_M2017_dl.xlsx", "state_M2018_dl.xlsx",
+    "state_M2019_dl.xlsx", "state_M2020_dl.xlsx", "state_M2021_dl.xlsx"
+  ),
+  group = c(
+    rep("C", 12),  # 1999–2012
+    rep("B", 7),   # 2013–2019
+    rep("A", 2)    # 2020–2021
+  ),
+  stringsAsFactors = FALSE
+)
+
+```
+
+## Exectuing the process_grouped_file Function
+
+```{r,warning=FALSE}
+setwd("C:/Users/yadel/OneDrive/Documents/1999-2021/")
+
+Salarios_all <- bind_rows(lapply(1:nrow(file_info), function(i) {
+  process_grouped_file(
+    year = file_info$year[i],
+    file_path = file_info$file[i],
+    group = file_info$group[i]
+  )
+}))
+```
+
+```{r}
+Salarios_PR <- Salarios_all%>%
+  filter(PRIM_STATE == "PR", !is.na(OCC_TITLE),
+         !is.na(OCC_CODE), !is.na(A_MEAN), !is.na(TOT_EMP))
+```
+
+## Estimating Elasticity with a Log-Log Regression Model
+
+Elasticity measures how responsive one variable is to changes in another.  
+In this case, we evaluate how **total employment** (`TOT_EMP`) responds to changes in **average wages** (`A_MEAN`).
+
+To estimate this relationship, we use a **log-log linear regression model**:
+
+$$
+\log(Y) = \beta_0 + \beta_1 \cdot \log(X) + \varepsilon
+$$
+
+Where:  
+- \( Y \) is the dependent variable (e.g., total employment)  
+- \( X \) is the independent variable (e.g., average wage)  
+- \( \beta_1 \) is the **elasticity coefficient**  
+- \( \varepsilon \) is the error term  
+
+In this model, \( \beta_1 \) represents the **percentage change in \( Y \)** for a **1% change in \( X \)**:
+
+$$
+\frac{d \log(Y)}{d \log(X)} = \beta_1
+$$
+
+### Interpretation:
+- If \( |\beta_1| > 1 \): **Elastic** — employment responds strongly to wage changes  
+- If \( |\beta_1| < 1 \): **Inelastic** — employment responds weakly to wage changes  
+
+This modeling approach is commonly used in economics because it:
+- Handles non-linear relationships more effectively
+- Allows for easier interpretation in **percentage terms**
+- Normalizes variable scales, making comparisons more meaningful
+
+
+## Elasticity Models for each occupation
+
+```{r,warning=FALSE}
+NNN1<-Salarios_PR %>% nest(data = -OCC_CODE)%>%
+  mutate(model = map(data, ~lm(log(TOT_EMP)~log(A_MEAN), data = .)), 
+           tidied = map(model, glance)) %>% 
+  unnest(tidied)
+```
+
+
+## Here we see the output for each ocupation.
+```{r,warning=FALSE}
+title<- Salarios_PR%>%
+  select(OCC_CODE, OCC_TITLE)%>%
+  distinct(OCC_CODE, .keep_all = TRUE)
+
+NNN<-Salarios_PR %>% nest(data = -OCC_CODE)%>%
+  mutate(model = map(data, ~lm(log(TOT_EMP)~log(A_MEAN),, data = .)), 
+         tidied = map(model, tidy)) %>% 
+  unnest(tidied)
+
+NNN<-NNN%>%
+  filter(term == "log(A_MEAN)")%>%
+  select(OCC_CODE,term, estimate,model, p_valor = p.value)
+
+
+NNN1<-NNN1%>%
+  inner_join(title,by = "OCC_CODE" )%>%
+  distinct(OCC_CODE, .keep_all = TRUE)
+
+NNN1<-NNN1%>%
+  inner_join(NNN, by = "OCC_CODE")%>%
+  distinct(OCC_CODE, .keep_all = TRUE)
+
+NNN2<-Salarios_PR %>% nest(data = -OCC_CODE)%>%
+  mutate(model = map(data, ~lm(log(TOT_EMP)~log(A_MEAN), data = .)), 
+         resid = map(model, residuals))%>%
+  select(OCC_CODE,resid)
+
+
+NNN1<-NNN1%>%
+  inner_join(NNN2, by = "OCC_CODE")%>%
+  distinct(OCC_CODE, .keep_all = TRUE)%>%
+  mutate(Elasticidad = ifelse(abs(estimate)>1,"Elastica", "Inelastica"))
+
+NNN1%>%
+  select(-resid,-model.x,-model.y,-data,-term)%>%
+  head(10)%>%
+  kable(caption = "Elasticity Estimate No verification (Showing 10)", digits = 2) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+## Now that we have our models we can verify the model assumptions. 
+
+## Evaluating Elasticity Models  
+
+### We validate the R-squares
+
+```{r}
+NNN1<-NNN1%>%
+  filter(p.value<0.01, p_valor<0.01)
+
+Elasticidades<- NNN1%>%
+  select(OCC_CODE, OCC_TITLE=  OCC_TITLE,resid, estimate,Elasticidad
+         ,p.value,p_valor,r.squared,adj.r.squared,model.x)%>%
+  arrange(OCC_CODE)%>%
+  filter(r.squared> .70, adj.r.squared>.70)
+ 
+```
+
+### We get the names of the occupations 
+```{r}
+
+ff<-map_df(Elasticidades$resid, ~as.data.frame(t(.)))
+rownames(ff)<- Elasticidades$OCC_CODE
+
+```
+
+## Normality test for the Data 
+
+```{r}
+# Get OCC_CODEs directly from Elasticidades
+occ_codes <- Elasticidades$OCC_CODE
+fff<-t(ff)
+
+fff<- as.data.frame(fff)
+
+# Apply Shapiro-Wilk test and collect p-values
+shapiro_test <- sapply(occ_codes, function(code) {
+  x <- fff[[code]]
+  if (all(is.na(x))) return(NA)  # handle NA-only columns safely
+  shapiro.test(x)$p.value
+})
+
+# Convert to a clean data frame
+shapiro_test <- data.frame(
+  OCC_CODE = names(shapiro_test),
+  p_value = unname(shapiro_test)
+)
+
+shapiro_test = shapiro_test %>%
+  rename(shapiro_p = p_value)
+
+```
+
+
+## Heteroskedasticity Test for the models
+
+```{r}
+library(lmtest)
+
+bp_test <- sapply(Elasticidades[[10]], function(modelo) {
+    tryCatch(bptest(modelo)$p.value, error = function(e) NA)
+})
+
+bp_test <- data.frame(matrix(unlist(bp_test)), nrow=length(bp_test), byrow=TRUE)
+
+colnames(bp_test)<- c("bp_test", "nrow", "byrow")
+
+bp_test<-bp_test%>%
+  mutate(OCC_CODE = occ_codes)
+
+bp_test <- bp_test %>%
+  rename(bp_p = bp_test)
+
+```
+
+
+##Evaluating Hypothesis Tests
+
+
+```{r}
+Elasticidades<-Elasticidades%>%
+  inner_join(shapiro_test, by = "OCC_CODE")%>%
+  distinct(OCC_CODE, .keep_all = TRUE)
+
+Elasticidades<-Elasticidades%>%
+  inner_join(bp_test, by = "OCC_CODE")%>%
+  distinct(OCC_CODE, .keep_all = TRUE)%>%
+  select(-nrow,-byrow)
+
+Elas<- Elasticidades%>%
+  filter(bp_p>0.05,shapiro_p>0.05)%>%
+  arrange(desc(estimate))%>%
+  rename(modelo = model.x) 
+
+table(Elas$Elasticidad)
+
+El<- Elas%>%
+  select(-resid,-modelo)
+
+
+Elasticidades%>%
+  filter(bp_p>0.05,shapiro_p>0.05)%>%
+  arrange(desc(estimate))%>%
+  select(-model.x,-resid)%>%
+  head(10)%>%
+  kable(caption = "Elasticity Estimate Verified (Showing 10)", digits = 2) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
+```
+## We now have the Elasticities that confine with the linear regression model assupmtions.
+
+
+```{r,echo=FALSE}
+ggplot(Elas, aes(x = reorder(OCC_CODE, -estimate), y = estimate)) +
+  geom_col(color="black", fill = "blue", alpha = 0.1) +
+  theme_bw() +
+  geom_hline(yintercept = -1, linetype = 'dashed', linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = 'dashed', linewidth = 1) +
+  annotate("text", x = "43-4051", y = -0.5, label = "Inelastic", vjust = -0.5) +
+  annotate("text", x = "51-6062", y = 1.5, label = "Elastic", vjust = 0.5) +
+  labs(
+    x = "Ocupations",
+    subtitle = "Elasticity Coeficients",
+    title = "Graph 1",
+    fill = "Ocupación"
+  ) +
+  theme(
+    axis.text.x = element_text(size = 8, angle = 90, hjust = 1),
+    axis.title.x = element_text(size = 12),
+    plot.title = element_text(size = 15, face = "bold", hjust = 0.5)
+  )
+
+```
+
+```{r,echo=FALSE}
+ggplot(Elas,aes(estimate))+
+  geom_histogram(bins  = 25, fill = "blue", color = "black", alpha = 0.1)+
+  theme_bw()+
+  labs(subtitle  = "Elasticity Histogram",x = "Elasticities",  title = "Graph 2")+
+  theme( axis.title.x = element_text(size = 12),
+         plot.title = element_text(size=15 ,face = "bold", hjust = 0.5))
+```
+
+```{r,echo=FALSE}
+Salarios_USA<-Salarios_all%>%
+  filter(AREA_TITLE != "Puerto Rico")
+
+Salarios_USA_2021<-Salarios_USA%>%
+  filter(YEAR == 2021)
+
+Salarios_USA<-Salarios_all%>%
+  filter(PRIM_STATE != "PR")
+
+Salarios_PR_20_21<-Salarios_PR%>%
+  filter(YEAR == 2021)
+```
+
+```{r}
+h1<-ggplot(Salarios_PR_20_21, aes(A_MEAN))+
+  geom_histogram(color="black", fill = "blue", alpha = 0.1)+
+  labs(x = "Puerto Rico Salaries")+
+  theme_bw()
+h2<-ggplot(Salarios_USA_2021, aes(A_MEAN))+
+  geom_histogram(color="black", fill = "blue", alpha = 0.1)+
+  labs(x = "USA Salaries",caption = "Source: BLS")+
+  theme_bw()
+
+tg <- textGrob('Graph 3', gp = gpar(fontsize = 13, fontface = 'bold'))
+sg <- textGrob("Salary Histograms for Puerto Rico & The United States", 
+               gp = gpar(fontsize = 10, fontface = 'bold'))
+
+
+
+grided <-grid.arrange(h1,h2, nrow = 1, ncol = 2)
+margin <- unit(0.5, "line")
+
+grid.arrange(tg, sg, grided,
+             heights = unit.c(grobHeight(tg) + 1.2*margin, 
+                              grobHeight(sg) + margin, 
+                              unit(1,"null")))
+
+
+```
+## Int ths part we will see some date related to employment of Puerto Rico and the United States.
+
+```{r,echo=FALSE}
+################Barplot Empelo y Salario########################
+Salarios_USA<-Salarios_all%>%
+  filter(AREA_TITLE != "Puerto Rico")
+
+Salarios_USA<-Salarios_all%>%
+  filter(PRIM_STATE != "PR")
+
+Salarios_PR_20_21<-Salarios_PR%>%
+  filter(YEAR == 2021)
+
+Salarios_PR_20_21<-Salarios_PR%>%
+  filter(YEAR == 2021)
+
+
+S_20_21<-Salarios_PR_20_21%>%    #Salario maximo 
+  distinct(OCC_CODE, .keep_all = T)%>%
+  arrange(desc(A_MEAN))
+
+S_20_21<-S_20_21[1:10,c(4,5,1)]
+
+S_20_21_p<-Salarios_PR_20_21%>% #Salario inimo 
+  distinct(OCC_CODE, .keep_all = T)%>%
+  arrange(A_MEAN)
+
+S_20_21_p<-S_20_21_p[1:10,c(4,5,1)]
+
+S_20_21_e<-Salarios_PR_20_21%>%   #Empleo Maximo 
+  distinct(OCC_CODE, .keep_all = T)%>%
+  arrange(desc(TOT_EMP))
+
+S_20_21_e<-S_20_21_e[2:11,c(4,5,6)]
+
+
+S_20_21_pp<-Salarios_PR_20_21%>%   #Empleo Minimo 
+  distinct(OCC_CODE, .keep_all = T)%>%
+  arrange(TOT_EMP)
+
+S_20_21_pp<-S_20_21_pp[2:11,c(4,5,6)]
+
+```
+
+```{r}
+margin <- unit(0.5, "line")
+
+
+low5 <- S_20_21_pp %>%
+  slice_min(order_by = TOT_EMP, n = 5)
+
+top5 = S_20_21_e %>%
+  slice_min(order_by = TOT_EMP, n = 5)
+
+empleo_min<-ggplot(low5, aes(x = reorder(OCC_TITLE,-TOT_EMP), y = TOT_EMP))+geom_col(color="black", fill = "blue", alpha = 0.1) +theme_bw()+
+  theme(plot.title = element_text(size=10),    
+        axis.text.x = element_text(size = 8, angle = 65, hjust = 1))+
+  labs(subtitle  = "Bottom 5 Employment by Ocupation",x = "", y = 'Total Employement')  +
+  theme(plot.title = element_text(size=10 ,face = "bold", hjust = 0.5),    
+        axis.text.x = element_text(size = 8, angle = 45, hjust = 1))
+
+
+empleo_max <- ggplot(top5, aes(x = reorder(OCC_TITLE,-TOT_EMP), y = TOT_EMP))+geom_col(color="black", fill = "blue", alpha = 0.1) +theme_bw()+
+    labs(subtitle  = "Top 5 Employment by Ocupation",x = "",y = '', caption = "Source: BLS")+
+  theme(plot.title = element_text(size=10 ,face = "bold", hjust = 0.5),    
+        axis.text.x = element_text(size = 8, angle = 45, hjust = 1))
+
+#empleo_min
+#empleo_max
+tg <- textGrob('Graph 4', gp = gpar(fontsize = 13, fontface = 'bold'))
+sg <- textGrob("Bar Charts for Bottom 5 and Top 5 Total Employment", 
+               gp = gpar(fontsize = 10, fontface = 'bold'))
+margin <- unit(0.5, "line")
+
+grid.arrange(tg, sg, grided,
+             heights = unit.c(grobHeight(tg) + 1.2*margin, 
+                              grobHeight(sg) + margin, 
+                              unit(1,"null")))
+grided <-grid.arrange(empleo_min,empleo_max, nrow = 1, ncol = 2)
+
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+
+capture.output({
+  library(readxl)
+  library(dplyr)
+  library(xts)
+
+  # Load and prep data
+  Empleo <- read_excel("C:/Users/yadel/OneDrive/Documents/1999-2021/Empleo.xlsx")
+
+  Empleo_ <- Empleo %>%
+    select(Year, Period, employment) %>%
+    summarise(Empleo = as.numeric(employment))
+
+  dates <- seq(as.Date("1999-01-01"), length = 279, by = "month")
+  empleos <- as.matrix(Empleo_)
+  empleo_xts <- xts(empleos, order.by = dates)
+
+  # Define events
+  events <- xts(
+    c("Recesion of 07", "Huracan María", "Act 7 of 2010"), 
+    as.Date(c("2006-12-01", "2017-09-01", "2009-03-09"))
+  )
+
+  # Plot all at once
+  par(mfrow = c(1, 1))
+  plot(empleo_xts, main = "Graph 5\nEmployed People\nSource: BLS")
+  addEventLines(events, pos = 2, offset = 0.5, cex = 1.2, col = "red", lwd = 2, srt = 90)
+})
+
+
+```
+
