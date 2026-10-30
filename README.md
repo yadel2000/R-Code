@@ -57,3 +57,26 @@ project/
 ├── scripts/       # R analysis scripts
 ├── output/        # Tables, charts, and model results
 └── README.md
+```
+
+## How to run 
+
+1. Install R.
+2. Install the required packages:
+      install.packages(c(
+        "readxl", "tidyverse", "janitor", "broom", "gridExtra",
+        "ggpubr", "xts", "data.table", "kableExtra", "lmtest"
+            ))
+3. Download the required BLS files and place them in data/.
+4. Update the file paths in the R script to point to the data folder.
+5. Run the script in RStudio or from the R console.
+
+
+## Limitations
+- Results depend on the available BLS estimates and the years included.
+- Some occupations may have few observations, which can make their regression estimates less reliable.
+- The regression describes an association in the data; it does not establish causation.
+- The PDF title says 2001–2022, while the listed occupational files in the code appear to run from 2001–2021. Confirm the actual years included before publishing results.
+
+## Author
+Yadel Rosario
