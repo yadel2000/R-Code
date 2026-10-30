@@ -1,6 +1,59 @@
-# R-Code
-This R script was used to analyse Employment and Wages from Puerto Ricoo
+# Puerto Rico Wages and Employment Analysis
 
+## Overview
 
+This project analyzes employment and average wages in Puerto Rico using data from the U.S. Bureau of Labor Statistics (BLS). It uses R to clean and combine occupational data, estimate wage elasticity by occupation, and review model fit and assumptions.
 
+## Research question
 
+How is employment associated with changes in average wages for different occupations in Puerto Rico?
+
+## Data
+
+The occupational wage and employment data come from the BLS Occupational Employment and Wage Statistics (OEWS), using May estimates.
+
+The analysis also includes a Puerto Rico employment time series for examining changes over time and selected economic events.
+
+**The source files are not included in this repository.** Download the required files from the BLS and place them in the data folder before running the analysis.
+
+BLS OEWS information: https://www.bls.gov/oes/oes_emp.htm
+
+## Methods
+
+The project:
+
+1. Reads and cleans the annual Excel files.
+2. Combines the files into a consistent table.
+3. Filters the occupational records for Puerto Rico.
+4. Fits a log-log linear regression for each occupation:
+
+   `log(employment) = β₀ + β₁ × log(average_wage) + error`
+
+5. Reviews model results and diagnostics, including R-squared, coefficient significance, residual normality, and heteroskedasticity.
+6. Creates charts of employment and wage-related results.
+
+The estimated coefficient, `β₁`, describes the percentage association between average wages and employment in the fitted data. It should not be interpreted as proof that a wage change causes an employment change.
+
+## Tools and R packages
+
+- R
+- readxl
+- tidyverse
+- janitor
+- broom
+- gridExtra
+- grid
+- ggpubr
+- xts
+- data.table
+- kableExtra
+- lmtest
+
+## Project structure
+
+```text
+project/
+├── data/          # BLS Excel files and employment time-series data
+├── scripts/       # R analysis scripts
+├── output/        # Tables, charts, and model results
+└── README.md
